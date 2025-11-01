@@ -20,7 +20,9 @@
   "homepage": "https://github.com/morsecodescott/mqtt_notification_service#readme",
   "dependencies": {
     "dotenv": "^17.2.3",
+    "express": "^5.1.0",
     "firebase-admin": "^13.5.0",
+    "mongoose": "^8.19.2",
     "mqtt": "^5.14.1"
   }
 }
