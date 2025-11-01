@@ -1,84 +1,109 @@
 // FileName: index.js
+// Load environment variables from a .env file into process.env
+require('dotenv').config();
 
 const mqtt = require('mqtt');
-const admin = require('firebase-admin');
+const { TOPIC_CONFIGS, ALL_TOPICS } = require('./config');
+const { initializeState, shouldNotify, updateState } = require('./stateManager');
+const { initializeFirebase, sendNotification } = require('./fcmService');
 
-// --- CONFIGURATION ---
-const serviceAccount = require('./service-account-key.json');
-const MQTT_BROKER_URL = 'mqtt://your.broker.address'; // e.g., 'mqtt://test.mosquitto.org'
-const MQTT_TOPIC = 'device/data/topic'; // The topic your data is published on
+// --- SERVICE INITIALIZATION ---
 
-// --- INITIALIZE FIREBASE ADMIN SDK ---
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// Initialize the Firebase Admin SDK to enable notifications.
+initializeFirebase();
 
-console.log('Firebase Admin SDK initialized.');
+// Initialize the state for each topic to prevent duplicate alerts.
+ALL_TOPICS.forEach(initializeState);
 
-// This is a placeholder. In a real app, you would get this token
-// from a database where you stored it from the Android app.
-// For testing, you can copy the token logged in your Android app's Logcat.
-const TARGET_FCM_TOKEN = 'YOUR_ANDROID_DEVICE_FCM_TOKEN_HERE';
+// --- MQTT CLIENT SETUP ---
 
-// --- CONNECT TO MQTT BROKER ---
-const client = mqtt.connect(MQTT_BROKER_URL);
+// Retrieve MQTT connection details from environment variables.
+const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL;
+const MQTT_USERNAME = process.env.MQTT_USERNAME;
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD;
+const FCM_TOKEN = process.env.FCM_TOKEN;
 
+// Configure MQTT client options for a secure connection.
+const mqttOptions = {
+    username: MQTT_USERNAME,
+    password: MQTT_PASSWORD,
+    protocol: 'mqtts', // Ensure a secure connection
+    connectTimeout: 5000 // 5 seconds
+};
+
+// --- CORE APPLICATION LOGIC ---
+
+// Establish connection to the MQTT broker.
+const client = mqtt.connect(MQTT_BROKER_URL, mqttOptions);
+
+// Fired when the client successfully connects to the broker.
 client.on('connect', () => {
-    console.log('Connected to MQTT broker.');
-    client.subscribe(MQTT_TOPIC, (err) => {
-        if (!err) {
-            console.log(`Successfully subscribed to topic: ${MQTT_TOPIC}`);
-        } else {
+    console.log('Successfully connected to MQTT broker.');
+    // Subscribe to all configured topics.
+    client.subscribe(ALL_TOPICS, (err) => {
+        if (err) {
             console.error('Subscription failed:', err);
+            // Consider adding reconnection logic or exiting.
+        } else {
+            console.log('Successfully subscribed to all topics.');
         }
     });
 });
 
-// --- MAIN LOGIC: HANDLE INCOMING MQTT MESSAGES ---
+// Fired when a message is received on any of the subscribed topics.
 client.on('message', (topic, message) => {
-    try {
-        const dataString = message.toString();
-        // Assuming the data is JSON like: {"temp": 25.5, "humidity": 60, ...}
-        const data = JSON.parse(dataString);
-        console.log(`Received data from ${topic}:`, data);
+    const messageStr = message.toString();
+    console.log(`Received message on ${topic}: ${messageStr}`);
 
-        // *** YOUR CRITERIA LOGIC GOES HERE ***
-        // Example: Send a notification if temperature is above 30
-        if (data.temperature && data.temperature > 30) {
-            console.log('CRITERIA MET: Temperature is high. Sending notification.');
+    const config = TOPIC_CONFIGS[topic];
+    if (!config) {
+        // Ignore messages from topics that are not configured.
+        return;
+    }
 
-            // Find the user's FCM token (here we use the hardcoded one)
-            // In a real app: const token = await database.getTokenForUser(data.userId);
-            const deviceToken = TARGET_FCM_TOKEN;
-            
-            sendFcmNotification(deviceToken, data.temperature);
-        }
+    // Attempt to parse the message as a numeric value.
+    const value = parseFloat(messageStr);
+    if (isNaN(value)) {
+        console.warn(`Could not parse numeric value from message on topic ${topic}`);
+        return;
+    }
 
-    } catch (error) {
-        console.error('Error processing MQTT message:', error);
+    // Determine if the value is outside the acceptable range.
+    let outOfRangeStatus = '';
+    if (value < config.min) {
+        outOfRangeStatus = 'below';
+    } else if (value > config.max) {
+        outOfRangeStatus = 'above';
+    }
+
+    const isOutOfRange = !!outOfRangeStatus;
+
+    // Use the state manager to decide if a notification is warranted.
+    if (shouldNotify(topic, isOutOfRange)) {
+        console.log(`Alert condition met for ${config.label}. Sending notification.`);
+
+        // Generate and send the notification.
+        const notification = config.getNotification(value, outOfRangeStatus);
+        sendNotification(FCM_TOKEN, notification);
+
+        // Update the state to reflect that an alert has been issued.
+        updateState(topic, true);
+    } else if (!isOutOfRange) {
+        // If the value is back within the normal range, reset the alert state.
+        updateState(topic, false);
     }
 });
 
+// Fired on MQTT client errors.
 client.on('error', (error) => {
     console.error('MQTT Client Error:', error);
 });
 
-// --- FUNCTION TO SEND NOTIFICATION VIA FCM ---
-async function sendFcmNotification(token, temperature) {
-    // This is a "data" message. It will always trigger onMessageReceived() in your app.
-    const message = {
-        data: {
-            title: 'High Temperature Alert!',
-            body: `The temperature has reached ${temperature}°C.`,
-            sensorId: 'sensor_123' // You can send any custom data you want
-        },
-        token: token
-    };
-
-    try {
-        const response = await admin.messaging().send(message);
-        console.log('Successfully sent message:', response);
-    } catch (error) {
-        console.error('Error sending message:', error);
-    }
-}
+// Gracefully handle process termination.
+process.on('SIGINT', () => {
+    console.log('Disconnecting from MQTT broker...');
+    client.end(() => {
+        console.log('MQTT client disconnected. Exiting.');
+        process.exit(0);
+    });
+});
