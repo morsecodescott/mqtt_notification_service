@@ -121,22 +121,42 @@ async function handleNumericThreshold(topic, message) {
         const devices = await Device.find({ [`topics.${topic}.enabled`]: true });
         for (const device of devices) {
             const topicSettings = device.topics.get(topic);
+            let hasChanged = false;
 
-            let outOfRangeStatus = '';
-            if (topicSettings.min !== null && value < topicSettings.min) outOfRangeStatus = 'below';
-            else if (topicSettings.max !== null && value > topicSettings.max) outOfRangeStatus = 'above';
+            const isLow = topicSettings.min !== null && topicSettings.min !== 0 && value < topicSettings.min;
+            const isHigh = topicSettings.max !== null && topicSettings.max !== 0 && value > topicSettings.max;
 
-            const isOutOfRange = !!outOfRangeStatus;
-            const hasAlertBeenSent = topicSettings.alertSent;
+            // Check for low threshold violation
+            if (isLow) {
+                if (!topicSettings.alertSentLow) {
+                    const staticConfig = TOPIC_CONFIGS[topic];
+                    const notification = staticConfig.getNotification(value, 'below');
+                    sendNotification(device.fcmToken, notification);
+                    topicSettings.alertSentLow = true;
+                    hasChanged = true;
+                }
+            }
+            // Check for high threshold violation
+            else if (isHigh) {
+                if (!topicSettings.alertSentHigh) {
+                    const staticConfig = TOPIC_CONFIGS[topic];
+                    const notification = staticConfig.getNotification(value, 'above');
+                    sendNotification(device.fcmToken, notification);
+                    topicSettings.alertSentHigh = true;
+                    hasChanged = true;
+                }
+            }
+            // If the value is within the normal range, reset both alerts
+            else {
+                if (topicSettings.alertSentLow || topicSettings.alertSentHigh) {
+                    topicSettings.alertSentLow = false;
+                    topicSettings.alertSentHigh = false;
+                    hasChanged = true;
+                }
+            }
 
-            if (isOutOfRange && !hasAlertBeenSent) {
-                const staticConfig = TOPIC_CONFIGS[topic];
-                const notification = staticConfig.getNotification(value, outOfRangeStatus);
-                sendNotification(device.fcmToken, notification);
-                device.topics.get(topic).alertSent = true;
-                await device.save();
-            } else if (!isOutOfRange && hasAlertBeenSent) {
-                device.topics.get(topic).alertSent = false;
+            if (hasChanged) {
+                device.topics.set(topic, topicSettings);
                 await device.save();
             }
         }
