@@ -18,6 +18,15 @@ const deviceSchema = new mongoose.Schema({
     of: topicSettingsSchema,
     default: {},
   },
+  generatorStatusAlerts: {
+    enabled: { type: Boolean, default: false },
+    lastStatus: { type: String, default: null },
+  },
+  communicationTimeout: {
+    enabled: { type: Boolean, default: false },
+    minutes: { type: Number, default: 60 },
+    alertSent: { type: Boolean, default: false },
+  },
 });
 
 const Device = mongoose.model('Device', deviceSchema);

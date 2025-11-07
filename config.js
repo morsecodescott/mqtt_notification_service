@@ -65,7 +65,11 @@ const TOPIC_CONFIGS = {
 };
 
 // Provides a complete list of all topics that the service should subscribe to.
-const ALL_TOPICS = Object.values(TOPIC_DEFINITIONS);
+const ALL_TOPICS = [
+    ...Object.values(TOPIC_DEFINITIONS),
+    'bluetti/generator/status',
+    'bluetti/AC200L2446000235977/state/#'
+];
 
 module.exports = {
     TOPIC_CONFIGS,
