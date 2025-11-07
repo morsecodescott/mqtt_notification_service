@@ -1,6 +1,7 @@
 // FileName: fcmService.js
 
 const admin = require('firebase-admin');
+const Device = require('./models/device');
 
 // Path to your Firebase service account key file.
 const SERVICE_ACCOUNT_PATH = './service-account-key.json';
@@ -44,7 +45,21 @@ async function sendNotification(token, { title, body }) {
         const response = await admin.messaging().send(message);
         console.log('Successfully sent notification:', response);
     } catch (error) {
-        console.error('Error sending FCM notification:', error);
+        if (error.code === 'messaging/registration-token-not-registered') {
+            console.log(`FCM token ${token} is not registered. Deleting device from the database.`);
+            try {
+                const result = await Device.findOneAndDelete({ fcmToken: token });
+                if (result) {
+                    console.log(`Successfully deleted device with FCM token: ${token}`);
+                } else {
+                    console.log(`Device with FCM token: ${token} not found.`);
+                }
+            } catch (dbError) {
+                console.error(`Error deleting device with FCM token: ${token} from the database:`, dbError);
+            }
+        } else {
+            console.error('Error sending FCM notification:', error);
+        }
     }
 }
 
